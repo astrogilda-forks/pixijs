@@ -1,0 +1,60 @@
+name: Unit tests for two perf branches (fork only)
+
+on:
+  push:
+    branches: [ ci-units-1110 ]
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: base-full
+            ref: f026bf8261fed12ee1a7170a856a49323d10bb04
+          - label: A-full
+            ref: 12b23af76fcdc5c0b02910ce71a85515ac5e618b
+          - label: B-full
+            ref: 4d642d8a061a4e2a5dc75b04c033c1061c3ba66b
+          - label: B-new-test-on-base
+            ref: f026bf8261fed12ee1a7170a856a49323d10bb04
+            from: 4d642d8a061a4e2a5dc75b04c033c1061c3ba66b
+            tests: src/rendering/renderers/gl/shader/__tests__/GlShaderSystemPrepare.test.ts
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ matrix.ref }}
+        fetch-depth: 0
+
+    - name: Bring the new test file to the baseline
+      if: matrix.from
+      run: git fetch origin ${{ matrix.from }} && git checkout ${{ matrix.from }} -- ${{ matrix.tests }}
+
+    - name: Setup Project
+      uses: ./.github/actions/setup
+
+    # Ubuntu 24.04 runners block unprivileged user namespaces through AppArmor, so
+    # Chromium's sandbox aborts Electron at startup; the Jest runner then waits forever.
+    - name: Allow unprivileged user namespaces
+      run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+    - name: Show what runs
+      run: |
+        echo "label=${{ matrix.label }} head=$(git rev-parse HEAD)"
+        git status --short
+
+    - name: Unit tests (full suite)
+      if: ${{ !matrix.tests }}
+      env:
+        NODE_ENV: production
+      run: xvfb-run --auto-servernum npm run test:unit -- --maxWorkers=50%
+
+    - name: Unit tests (one file)
+      if: matrix.tests
+      env:
+        NODE_ENV: production
+      run: xvfb-run --auto-servernum npx jest --config .configs/jest.config.js --runInBand --verbose --runTestsByPath ${{ matrix.tests }}
